@@ -27,13 +27,12 @@ def fetch_url_markup(url):
 
 def fetch_url_markups(markup_queue, urls, max_threads=1):
     """Fetches markup from `urls` and stores it into `markup_queue`."""
-    tasks = []
     with ThreadPoolExecutor(max_workers=max_threads) as executor:
-        for url in urls:
+        for i, url in enumerate(urls, 1):
             future = executor.submit(fetch_url_markup, url)
-            tasks.append(future.result())
-    for task in tasks:
-        markup_queue.put(task)
+            task = future.result()
+            markup_queue.put(task)
+            print('Produced %s: %s' % (i, url))
     markup_queue.put(None)
 
 
@@ -42,6 +41,7 @@ def extract_url_links(markup_queue, url_links):
     Extracts links from markups stored in `markup_queue` and stores them to
     `url_links`.
     """
+    count = 1
     while True:
         task = markup_queue.get()
         if task is None:
@@ -49,6 +49,11 @@ def extract_url_links(markup_queue, url_links):
         try:
             links = Selector(text=task['markup']).xpath('//a/@href').extract()
             url_links.extend(links)
+            print('Consumed %s: %s' % (count, task['url']))
+            # FIXME: Consumer is too fast, lets slow it down to see Producer at work
+            import time
+            time.sleep(1)
+            count += 1
         except Exception as e:
             print('Failed to consume url links %s' % e)
 
@@ -96,6 +101,9 @@ def parse_args():
     parser.add_argument(
         '-t', '--maxthreads', type=int, default=1,
         help='Number of threads for fetching url markup (default: 1)')
+    parser.add_argument(
+        '-s', '--qsize', type=int, default=10,
+        help='Size of the markup queue (default: 10)')
     return parser.parse_args()
 
 
@@ -106,7 +114,7 @@ def main():
     else:
         urls = get_urls_from_file(args.infile)
 
-    le = LinkExtractor(urls=urls, max_threads=args.maxthreads)
+    le = LinkExtractor(urls=urls, size=args.qsize, max_threads=args.maxthreads)
     links = le.run()
 
     if args.outfile:
