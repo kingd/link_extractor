@@ -6,7 +6,7 @@ Usage
 
 ::
 
-    ./link_extractor.py -i urls.py -o mylinks.txt
+    ./link_extractor.py -i urls.txt -o mylinks.txt
     ./link_extractor.py -u http://google.com -o mylinks.txt
     ./link_extractor.py -u http://google.com
 
