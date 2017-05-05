@@ -1,30 +1,39 @@
 #!/usr/bin/env python
-
+# -*- coding: utf-8 -*-
+"""
+    Extracts links from a list of urls using Producer/Consumer pattern.
+"""
 import argparse
 import os
-import random
-import sys
-import time
-import urllib
 
+from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Process, Manager
 
 import requests
 from scrapy.selector import Selector
 
 
-def fetch_url_markups(markup_queue, urls):
+def fetch_url_markup(url):
+    try:
+        r = requests.get(url)
+        if r.status_code == 200:
+            task = {'url': url, 'markup': r.text}
+            return task
+        else:
+            print('Response is not valid for %s: %s.' % (url, status_code))
+    except Exception as e:
+        print('Error while extracting markup from %s: %s.' % (url, e))
+
+
+def fetch_url_markups(markup_queue, urls, max_threads=1):
     """Fetches markup from `urls` and stores it into `markup_queue`."""
-    for url in urls:
-        try:
-            r = requests.get(url)
-            if r.status_code == 200:
-                task = {'url': url, 'markup': r.text}
-                markup_queue.put(task)
-            else:
-                print('Response is not valid for %s: %s.' % (url, status_code))
-        except Exception as e:
-            print('Error while extracting markup from %s: %s.' % (url, e))
+    tasks = []
+    with ThreadPoolExecutor(max_workers=max_threads) as executor:
+        for url in urls:
+            future = executor.submit(fetch_url_markup, url)
+            tasks.append(future.result())
+    for task in tasks:
+        markup_queue.put(task)
     markup_queue.put(None)
 
 
@@ -49,14 +58,17 @@ class LinkExtractor(object):
     Fetches markup from `urls` and extraxts links from them using simple
     Producer/Consumer pattern. Max size of the underlying markup_queue can be set with `size`.
     """
-    def __init__(self, urls, size=10):
+    def __init__(self, urls, size=10, max_threads=10):
         self.urls = urls
         self.manager = Manager()
         self.markups = self.manager.Queue(size)
         self.url_links = self.manager.list()
+        self.max_threads = max_threads
 
     def run(self):
-        producer = Process(target=fetch_url_markups, args=(self.markups, self.urls))
+        producer = Process(target=fetch_url_markups, args=(self.markups,
+                                                           self.urls,
+                                                           self.max_threads))
         consumer = Process(target=extract_url_links, args=(self.markups, self.url_links))
         producer.start()
         consumer.start()
@@ -81,6 +93,9 @@ def parse_args():
     group.add_argument('-i', '--infile', help='Input file')
     group.add_argument('-u', '--url', help='Input url')
     parser.add_argument('-o', '--outfile', help='Output file')
+    parser.add_argument(
+        '-t', '--maxthreads', type=int, default=1,
+        help='Number of threads for fetching url markup (default: 1)')
     return parser.parse_args()
 
 
@@ -91,7 +106,8 @@ def main():
     else:
         urls = get_urls_from_file(args.infile)
 
-    links = LinkExtractor(urls=urls).run()
+    le = LinkExtractor(urls=urls, max_threads=args.maxthreads)
+    links = le.run()
 
     if args.outfile:
         with open(args.outfile, 'w+') as f:
