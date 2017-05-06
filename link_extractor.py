@@ -5,34 +5,37 @@
 """
 import argparse
 import os
+from urllib.request import Request, urlopen
+from urllib.error import URLError, HTTPError
 
 from concurrent.futures import ThreadPoolExecutor
 from multiprocessing import Process, Manager
 
-import requests
 from scrapy.selector import Selector
 
-
 def fetch_url_markup(url):
+    req = Request(url)
     try:
-        r = requests.get(url)
-        if r.status_code == 200:
-            task = {'url': url, 'markup': r.text}
-            return task
-        else:
-            print('Response is not valid for %s: %s.' % (url, status_code))
+        response = urlopen(req)
+        html = response.read()
+        task = {'url': url, 'markup': html}
+        return task
+    except HTTPError as e:
+        print('HTTP error: %s %s' % (e.code, e.reason))
+    except URLError as e:
+        print('URL error: %s' % e.reason)
     except Exception as e:
-        print('Error while extracting markup from %s: %s.' % (url, e))
+        print('Unknown error: %s' % e)
 
 
 def fetch_url_markups(markup_queue, urls, max_threads=1):
     """Fetches markup from `urls` and stores it into `markup_queue`."""
     with ThreadPoolExecutor(max_workers=max_threads) as executor:
-        for i, url in enumerate(urls, 1):
-            future = executor.submit(fetch_url_markup, url)
-            task = future.result()
-            markup_queue.put(task)
-            print('Produced %s: %s' % (i, url))
+        results = executor.map(fetch_url_markup, urls)
+        for i, task in enumerate(results, 1):
+            if task:
+                markup_queue.put(task)
+                print('Produced %s: %s' % (i, task['url']))
     markup_queue.put(None)
 
 
@@ -50,9 +53,6 @@ def extract_url_links(markup_queue, url_links):
             links = Selector(text=task['markup']).xpath('//a/@href').extract()
             url_links.extend(links)
             print('Consumed %s: %s' % (count, task['url']))
-            # FIXME: Consumer is too fast, lets slow it down to see Producer at work
-            import time
-            time.sleep(1)
             count += 1
         except Exception as e:
             print('Failed to consume url links %s' % e)
